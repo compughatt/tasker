@@ -1,0 +1,1550 @@
+-- Tasker by Compughatt
+-- Version 1.0 2/26/2013
+
+-- Config
+local program = "Tasker"
+local version = "v1.0"
+local author = "Compughatt"
+screenw,screenh = term.getSize()
+
+--------------------------------------------------------------------------------
+
+-- Params
+
+local params = {}
+params = {
+    ignoreFrom = nil,
+    ignoreThru = nil,
+    fuelFrom = nil,
+    fuelThru = nil,
+    sealant = nil,
+}
+
+--------------------------------------------------------------------------------
+
+-- State
+
+local state = {}
+state = {
+    x = 0,
+    y = 0,
+    z = 0,
+    facing = 0,
+
+    waypoints = {},
+    lastWaypoint = nil,
+    distanceToLast = 0,
+    distanceBetween = 0,
+
+    paused = false,
+    running = true,
+}
+
+--------------------------------------------------------------------------------
+
+-- Atomic actions
+
+local action = {}
+action = {
+    facingToAxis = {
+        [0] = { axis = 'z', unit = 1 },
+        [1] = { axis = 'x', unit = -1 },
+        [2] = { axis = 'z', unit = -1 },
+        [3] = { axis = 'x', unit = 1 }
+    },
+
+    -- Purpose:
+    --  Determines which way its facing
+    --
+    -- Arguments:
+    --  None
+    --
+    -- Returns:
+    --  [axis (x,z), direction]
+    --
+    getAxisForFacingForward = function()
+        return action.facingToAxis[state.facing]['axis'], action.facingToAxis[state.facing]['unit']
+    end,
+
+
+    -- Purpose:
+    --  Determines which way its right-hand side is facing
+    --
+    -- Arguments:
+    --  None
+    --
+    -- Returns:
+    --  [axis (x,z), direction]
+    --
+    getAxisForFacingRight = function()
+        return action.facingToAxis[(state.facing+1)%4]['axis'], action.facingToAxis[(state.facing+1)%4]['unit']
+    end,
+
+
+    -- Purpose:
+    --  Determines the current position
+    --
+    -- Arguments:
+    --  None
+    --
+    -- Returns:
+    --  Position object
+    --
+    getCurrentPos = function()
+        return {x = state.x, y = state.y, z = state.z, facing = state.facing,}
+    end,
+
+
+    -- Purpose:
+    --  Determines if the current position matches the given position
+    --
+    -- Arguments:
+    --  pos - Position to compare against
+    --
+    -- Returns:
+    --  True if the positions match, else false
+    --
+    isAtPos = function(pos)
+        if state.x ~= pos.x or state.y ~= pos.y or state.z ~= pos.z or pos.facing and (state.facing ~= pos.facing) then
+            return false
+        else
+            return true
+        end
+    end,
+
+
+    -- Purpose:
+    --  Transform from local to global coordinates
+    --
+    -- Arguments:
+    --  origin - origin of local coordinate system as a global position
+    --  loc    - local position
+    --
+    -- Returns:
+    --  Global position
+    --
+    -- Locals:
+    --  global - global position
+    --
+    localToGlobal = function(origin, loc)
+        local global = {
+            x = nil,
+            y = loc.y,
+            z = nil,
+            facing = nil,
+        }
+
+        if origin.facing == 0 then
+            global.x = loc.x
+            global.z = loc.z
+        elseif origin.facing == 1 then
+            global.x = -loc.z
+            global.z = loc.x
+        elseif origin.facing == 2 then
+            global.x = -loc.x
+            global.z = -loc.z
+        elseif origin.facing == 3 then
+            global.x = loc.z
+            global.z = -loc.x
+        end
+
+        global.x = global.x + origin.x
+        global.y = global.y + origin.y
+        global.z = global.z + origin.z
+
+        if loc.facing then
+            global.facing = origin.facing + loc.facing % 4
+        end
+
+        return global
+    end,
+
+
+    -- Purpose:
+    --  Turns left
+    --
+    -- Arguments:
+    --  None
+    --
+    -- Returns:
+    --  None
+    --
+    turnLeft = function()
+        state.facing = (state.facing - 1) % 4
+        turtle.turnLeft()
+    end,
+
+
+    -- Purpose:
+    --  Turns right
+    --
+    -- Arguments:
+    --  None
+    --
+    -- Returns:
+    --  None
+    --
+    turnRight = function()
+        state.facing = (state.facing + 1) % 4
+        turtle.turnRight()
+    end,
+
+
+    -- Purpose:
+    --  Faces the given direction
+    --
+    -- Arguments:
+    --  faceto - Direction to face (0-3)
+    --
+    -- Returns:
+    --  None
+    --
+    -- Locals:
+    --  dirdif - Turns to make
+    --
+    face = function(faceto)
+
+        local dirdif = (faceto - state.facing) % 4
+        if dirdif == 1 then
+            action.turnRight()
+        elseif dirdif == 2 then
+            action.turnRight()
+            action.turnRight()
+        elseif dirdif == 3 then
+            action.turnLeft()
+        end
+    end,
+
+
+    -- Purpose:
+    --  Moves forward one unit
+    --
+    -- Arguments:
+    --  passive - Flag to indicate that no digging or attacking should occur
+    --
+    -- Returns:
+    --  True if successful, else false
+    --
+    moveForward = function(passive)
+        if passive then
+            if not turtle.forward() then
+                return false
+            end
+        else
+            while not turtle.forward() do
+                if turtle.getFuelLevel() == 0 then
+                    return false
+                elseif turtle.detect() then
+                    turtle.select(1)
+                    turtle.dig()
+                    if turtle.detect() then
+                        return false
+                    end
+                else
+                    turtle.attack()
+                end
+            end
+        end
+        local axis, unit = action.getAxisForFacingForward()
+        state[axis] = state[axis] + unit
+        return true
+    end,
+
+
+    -- Purpose:
+    --  Moves up one unit
+    --
+    -- Arguments:
+    --  passive - Flag to indicate that no digging or attacking should occur
+    --
+    -- Returns:
+    --  True if successful, else false
+    --
+    moveUp = function(passive)
+        if passive then
+            if not turtle.up() then
+                return false
+            end
+        else
+            while not turtle.up() do
+                if turtle.getFuelLevel() == 0 then
+                    return false
+                elseif turtle.detectUp() then
+                    turtle.select(1)
+                    turtle.digUp()
+                    if turtle.detectUp() then
+                        return false
+                    end
+                else
+                    turtle.attackUp()
+                end
+            end
+        end
+        state.y = state.y + 1
+        return true
+    end,
+
+
+    -- Purpose:
+    --  Moves down one unit
+    --
+    -- Arguments:
+    --  passive - Flag to indicate that no digging or attacking should occur
+    --
+    -- Returns:
+    --  True if successful, else false
+    --
+    moveDown = function(passive)
+        if passive then
+            if not turtle.down() then
+                return false
+            end
+        else
+            while not turtle.down() do
+                if turtle.getFuelLevel() == 0 then
+                    return false
+                elseif turtle.detectDown() then
+                    turtle.select(1)
+                    turtle.digDown()
+                    if turtle.detectDown() then
+                        return false
+                    end
+                else
+                    turtle.attackDown()
+                end
+            end
+        end
+        state.y = state.y - 1
+        return true
+    end,
+
+
+    -- Purpose:
+    --  Moves toward the given coordinate
+    --
+    -- Arguments:
+    --  x       - Destination x coordinate
+    --  y       - Destination y coordinate
+    --  z       - Destination z coordinate
+    --  facing  - Final direction to face
+    --  passive - Flag to indicate that no digging or attacking should occur
+    --
+    -- Returns:
+    --  True if successful, else false
+    --
+    moveToward = function(x, y, z, facing, passive)
+        local success
+        if y > state.y then
+            success = action.moveUp(passive)
+        elseif x < state.x then
+            action.face(1)
+            success = action.moveForward(passive)
+        elseif x > state.x then
+            action.face(3)
+            success =  action.moveForward(passive)
+        elseif z < state.z then
+            action.face(2)
+            success = action.moveForward(passive)
+        elseif z > state.z then
+            action.face(0)
+            success = action.moveForward(passive)
+        elseif y < state.y then
+            success = action.moveDown(passive)
+        else
+            success = true
+        end
+
+        if x == state.x and y == state.y and z == state.z and facing then
+            action.face(facing)
+        end
+
+        return success
+    end,
+
+
+    -- Purpose:
+    --  Moves toward the given position
+    --
+    -- Arguments:
+    --  pos     - Destination position {x=XXX, y=XXX, z=XXX, facing=XXX}
+    --  passive - Flag to indicate that no digging or attacking should occur
+    --
+    -- Returns:
+    --  True if successful, else false
+    --
+    moveTowardPos = function(pos, passive)
+        return action.moveToward(pos.x, pos.y, pos.z, pos.facing, passive)
+    end,
+
+
+    -- Purpose:
+    --  Calculates the distance to the given coordinate
+    --
+    -- Arguments:
+    --  x - X coordinate
+    --  y - Y coordinate
+    --  z - Z coordinate
+    --
+    -- Returns:
+    --  Distance to the given coordinate
+    --
+    distanceTo = function(x, y, z)
+        return math.abs(x - state.x) + math.abs(y - state.y) + math.abs(z - state.z)
+    end,
+
+
+    -- Purpose:
+    --  Calculates the distance to the given position
+    --
+    -- Arguments:
+    --  pos - Position {x=XXX, y=XXX, z=XXX, facing=XXX}
+    --
+    -- Returns:
+    --  Distance to the given position
+    --
+    distanceToPos = function(pos)
+        return action.distanceTo(pos.x, pos.y, pos.z)
+    end,
+
+
+    -- Purpose:
+    --  Calculates the distance between two positions
+    --
+    -- Arguments:
+    --  posA - Position {x=XXX, y=XXX, z=XXX, facing=XXX}
+    --  posB - Position {x=XXX, y=XXX, z=XXX, facing=XXX}
+    --
+    -- Returns:
+    --  Distance between the given positions
+    --
+    distanceBetweenPos = function(posA, posB)
+        return math.abs(posB.x - posA.x) + math.abs(posB.y - posA.y) + math.abs(posB.z - posA.z)
+    end,
+
+
+    -- Purpose:
+    --  Searches for an interesting block in front
+    --
+    -- Arguments:
+    --  None
+    --
+    -- Returns:
+    --  True if found, else false
+    --
+    -- Locals:
+    --  i - iterator
+    --
+    searchForward = function()
+        if not turtle.detect() then
+            return false
+        end
+        for i=params.ignoreFrom,params.ignoreThru do
+            turtle.select(i)
+            if turtle.compare() then
+                return false
+            end
+        end
+        return true
+    end,
+
+
+    -- Purpose:
+    --  Searches for an interesting block above
+    --
+    -- Arguments:
+    --  None
+    --
+    -- Returns:
+    --  True if found, else false
+    --
+    -- Locals:
+    --  i - iterator
+    --
+    searchUp = function()
+        if not turtle.detectUp() then
+            return false
+        end
+        for i=params.ignoreFrom,params.ignoreThru do
+            turtle.select(i)
+            if turtle.compareUp() then
+                return false
+            end
+        end
+        return true
+    end,
+
+
+    -- Purpose:
+    --  Searches for an interesting block below
+    --
+    -- Arguments:
+    --  None
+    --
+    -- Returns:
+    --  True if found, else false
+    --
+    -- Locals:
+    --  i - iterator
+    --
+    searchDown = function()
+        if not turtle.detectDown() then
+            return false
+        end
+        for i=params.ignoreFrom,params.ignoreThru do
+            turtle.select(i)
+            if turtle.compareDown() then
+                return false
+            end
+        end
+        return true
+    end,
+
+
+    -- Purpose:
+    --  Adds a waypoint
+    --
+    -- Arguments:
+    --  pos - Position of new waypoint
+    --
+    -- Returns:
+    --  None
+    --
+    -- Locals:
+    --  delta - Distance between former waypoint and new waypoint
+    --
+    addWaypoint = function(pos)
+        local delta
+        if state.lastWaypoint then
+            delta = action.distanceBetweenPos(state.lastWaypoint, pos)
+        else
+            delta = 0
+        end
+
+        table.insert(state.waypoints, pos)
+        state.lastWaypoint = pos
+        state.distanceBetween = state.distanceBetween + delta
+        state.distanceToLast = action.distanceToPos(state.lastWaypoint)
+    end,
+
+
+    -- Purpose:
+    --  Removes a waypoint
+    --
+    -- Arguments:
+    --  None
+    --
+    -- Returns:
+    --  None
+    --
+    -- Locals:
+    --  pos   - Position of removed waypoint
+    --  delta - Distance between former waypoint and new waypoint
+    --
+    removeWaypoint = function()
+        local delta
+        local pos = table.remove(state.waypoints)
+
+        if next(state.waypoints) ~= nil then
+            state.lastWaypoint = state.waypoints[#state.waypoints]
+            delta = action.distanceBetweenPos(state.lastWaypoint, pos)
+        else
+            state.lastWaypoint = nil
+            delta = 0
+        end
+
+        state.distanceBetween = state.distanceBetween - delta
+        if state.lastWaypoint then
+            state.distanceToLast = action.distanceToPos(state.lastWaypoint)
+        else
+            state.distanceToLast = 0
+        end
+    end,
+
+
+    -- Purpose:
+    --  Removes a waypoint
+    --
+    -- Arguments:
+    --  pos - Position of new waypoint
+    --
+    -- Returns:
+    --  None
+    --
+    updateWaypoint = function(pos)
+        action.removeWaypoint()
+        action.addWaypoint(pos)
+    end,
+
+
+    -- Purpose:
+    --  Returns the last waypoint
+    --
+    -- Arguments:
+    --  None
+    --
+    -- Returns:
+    --  Position
+    --
+    getLastWaypoint = function()
+        return state.lastWaypoint
+    end,
+
+    -- Purpose:
+    --  Checks if there is enough fuel, consuming fuel if needed
+    --
+    -- Arguments:
+    --  distance - Distance for which to check fuel availability
+    --
+    -- Returns:
+    --  True if necessary fuel is available, else false
+    --
+    -- Locals:
+    --  needed - Amount of needed fuel
+    --
+    enoughFuel = function(distance)
+        if turtle.getFuelLevel() == "unlimited" then
+            return true
+        end
+
+        if turtle.getFuelLevel() < distance then
+            for n=params.fuelFrom,params.fuelThru do
+                if turtle.getItemCount(n) > 0 then
+                    turtle.select(n)
+                    if turtle.refuel(1) then
+                        while turtle.getItemCount(n) > 0 and turtle.getFuelLevel() < distance do
+                            turtle.refuel(1)
+                        end
+                        if turtle.getFuelLevel() >= distance then
+                            turtle.select(1)
+                            return true
+                        end
+                    end
+                end
+            end
+            turtle.select(1)
+            return false
+        end
+        return true
+    end,
+
+
+    -- Purpose:
+    --  Drops/unloads the items from the turtle
+    --
+    -- Arguments:
+    --  None
+    --
+    -- Returns:
+    --  None
+    --
+    unload = function()
+        for i=1,16 do
+            if turtle.getItemCount(i) > 0 then
+                turtle.select(i)
+                if i >= params.ignoreFrom and i <= params.ignoreThru then
+                    if (i ~= params.sealant) then
+                        turtle.drop(turtle.getItemCount(i) - 1)
+                    end
+                elseif i < params.fuelFrom or i > params.fuelThru and i ~= params.sealant then
+                    turtle.drop()
+                end
+            end
+        end
+        turtle.select(1)
+    end,
+
+
+    -- Purpose:
+    --  Determines if empty slots are available
+    --
+    -- Arguments:
+    --  None
+    --
+    -- Returns:
+    --  True if empty slots are available, else false
+    --
+    spaceAvailable = function()
+        for i=1,16 do
+            if turtle.getItemCount(i) == 0 then
+                return true
+            end
+        end
+        return false
+    end,
+}
+
+--------------------------------------------------------------------------------
+
+-- Utilities
+
+local util = {}
+util = {
+
+    -- Purpose:
+    --  Checks the paused flag and waits until it is cleared
+    --
+    -- Arguments:
+    --  None
+    --
+    -- Returns:
+    --  None
+    --
+    pause = function()
+        while state.paused do
+            sleep(1)
+        end
+    end,
+
+
+    -- Purpose:
+    --  Saves the table under the given filename
+    --
+    -- Arguments:
+    --  table    - Table to save
+    --  filename - Filename to save the data under
+    --
+    -- Returns:
+    --  None
+    --
+    saveTable = function(table,filename)
+        local file = fs.open(filename,"w")
+        file.write(textutils.serialize(table))
+        file.close()
+    end,
+
+
+    -- Purpose:
+    --  Loads a table from the given filename
+    --
+    -- Arguments:
+    --  filename - Filename to save the data under
+    --
+    -- Returns:
+    --  Table that was loaded
+    --
+    -- Locals:
+    --  data - serialized data loaded from the file
+    --
+    loadTable = function(filename)
+        local file = fs.open(filename,"r")
+        local data = file.readAll()
+        file.close()
+        return textutils.unserialize(data)
+    end,
+}
+
+--------------------------------------------------------------------------------
+
+-- Task engine
+
+local task = {}
+task = {
+    stack = {},
+    current = nil,
+    governor = function () end,
+    queued = nil,
+
+
+    -- Purpose:
+    --  Queues the start of a new task
+    --
+    -- Arguments:
+    --  type - Type of task
+    --  data - Data associated with new task
+    --
+    -- Returns:
+    --  None
+    --
+    queueBegin = function(type, data)
+        task.queued = {action = "begin", type = type, data = data,}
+    end,
+
+
+    -- Purpose:
+    --  Queues the completion of a task
+    --
+    -- Arguments:
+    --  None
+    --
+    -- Returns:
+    --  None
+    --
+    queueComplete = function()
+        task.queued = {action = "complete",}
+    end,
+
+
+    -- Purpose:
+    --  Starts a new task
+    --
+    -- Arguments:
+    --  None
+    --
+    -- Returns:
+    --  None
+    --
+    -- Locals:
+    --  data - Data to pass to the task
+    --
+    begin = function()
+        if task.current then
+            if tasktype[task.current.type].onStack then
+               tasktype[task.current.type].onStack(task.queued.type)
+            end
+        end
+
+        local data = task.queued.data
+        task.current = {type = task.queued.type}
+        table.insert(task.stack, task.current)
+        task.queued = nil
+
+        task.governor = tasktype[task.current.type].onExecute
+
+        if tasktype[task.current.type].onStart then
+            tasktype[task.current.type].onStart(data)
+        end
+    end,
+
+
+    -- Purpose:
+    --  Completes a task
+    --
+    -- Arguments:
+    --  None
+    --
+    -- Returns:
+    --  None
+    --
+    complete = function()
+        local formerType = task.current.type
+        task.queued = nil
+
+        if tasktype[task.current.type].onStop then
+            tasktype[task.current.type].onStop()
+        end
+
+        table.remove(task.stack)
+
+        if #task.stack ~= 0 then
+            task.current = task.stack[#task.stack]
+            task.governor = tasktype[task.current.type].onExecute
+            if tasktype[task.current.type].onResume then
+                tasktype[task.current.type].onResume(formerType)
+            end
+        else
+            task.current = nil
+            task.governor = nil
+            state.running = false
+        end
+    end,
+
+
+    -- Purpose:
+    --  Executes a tick for the current task
+    --
+    -- Arguments:
+    --  None
+    --
+    -- Returns:
+    --  None
+    --
+    executeTick = function()
+        while task.queued do
+            if task.queued.action == "begin" then
+                task.begin()
+            elseif task.queued.action == "complete" then
+                task.complete()
+            end
+        end
+
+        if task.governor then
+            task.governor()
+        end
+    end,
+}
+
+--------------------------------------------------------------------------------
+
+-- Task types
+
+local taskType = {}
+tasktype = {
+    template = {
+        onStart = function(data)
+        end,
+
+        onStop = function()
+        end,
+
+        onStack = function(nextType)
+        end,
+
+        onResume = function(priorType)
+        end,
+
+        onExecute = function()
+        end,
+    },
+
+    exist = {
+        onExecute = function()
+            sleep(1)
+        end,
+    },
+
+    moveAlong = {
+        onStart = function(data)
+            task.current.length = data.length
+            task.current.progress = 0
+            action.enoughFuel(task.current.length + 1)
+        end,
+
+        onExecute = function()
+            if task.current.progress < task.current.length then
+                action.moveForward()
+                task.current.progress = task.current.progress + 1
+                task.queueTask("searchForOre")
+            else
+                task.queueComplete()
+            end
+        end,
+    },
+
+    searchForOre = {
+        onStart = function()
+            action.enoughFuel(7)
+            action.addWaypoint(action.getCurrentPos())
+            task.current.direction = 1
+            task.current.restorePos = nil
+        end,
+
+        onExecute = function()
+            if task.current.restorePos then
+                if action.moveTowardPos(task.current.restorePos, false) then
+                    task.current.restorePos = nil
+                end
+            elseif task.current.direction <= 6 then
+                local restoreTo = action.getCurrentPos()
+                if task.current.direction <= 4 then
+                    restoreTo.facing = (restoreTo.facing + 1) % 4
+                    if action.searchForward() then
+                        if action.moveForward() then
+                            task.current.restorePos = restoreTo
+                            task.current.direction = task.current.direction + 1
+                            task.queueBegin("searchForOre")
+                        end
+                    else
+                        action.turnRight()
+                        task.current.direction = task.current.direction + 1
+                    end
+                elseif task.current.direction == 5 then
+                    if action.searchUp() then
+                        if action.moveUp() then
+                            task.current.restorePos = restoreTo
+                            task.current.direction = task.current.direction + 1
+                            task.queueBegin("searchForOre")
+                        end
+                    else
+                        task.current.direction = task.current.direction + 1
+                    end
+                elseif task.current.direction == 6 then
+                    if action.searchDown() then
+                        if action.moveDown() then
+                            task.current.restorePos = restoreTo
+                            task.current.direction = task.current.direction + 1
+                            task.queueBegin("searchForOre")
+                        end
+                    else
+                        task.current.direction = task.current.direction + 1
+                    end
+                end
+            else
+                task.queueComplete()
+            end
+        end,
+
+        onComplete = function()
+            action.removeWaypoint()
+        end,
+    },
+
+    goToPos = {
+        onStart = function(data)
+            task.current.destination = data.pos
+            action.enoughFuel(action.distanceToPos(task.current.destination)+1)
+        end,
+
+        onExecute = function()
+            if not action.isAtPos(task.current.destination) then
+               action.moveTowardPos(task.current.destination, true)
+            else
+                task.queueComplete()
+            end
+        end,
+    },
+
+    excavate = {
+        onStart = function(data)
+            action.enoughFuel(data.length * data.width * data.height)
+            task.current.width = data.width
+            task.current.height = data.height
+            task.current.length = data.length
+            task.current.col = 0
+            task.current.row = 0
+            task.current.slice = 0
+            task.current.colInc = 1
+            task.current.rowInc = 1
+            task.current.colLim = task.current.width - 1
+            task.current.rowLim = task.current.height - 1
+            task.current.sliceLim = task.current.length - 1
+            task.current.origin = action.getCurrentPos()
+            task.current.target = nil
+            action.addWaypoint(action.getCurrentPos())
+        end,
+
+        onExecute = function()
+            if not task.current.target then
+                if task.current.col ~= task.current.colLim then
+                    task.current.col = task.current.col + task.current.colInc
+                    task.current.target = action.localToGlobal(task.current.origin, {x = task.current.col, y = task.current.row, z = task.current.slice})
+                elseif task.current.row ~= task.current.rowLim then
+                    task.current.row = task.current.row + task.current.rowInc
+                    task.current.colInc = task.current.colInc * -1
+                    if task.current.colInc == 1 then
+                        task.current.colLim = task.current.width - 1
+                    else
+                        task.current.colLim = 0
+                    end
+                    task.current.target = action.localToGlobal(task.current.origin, {x = task.current.col, y = task.current.row, z = task.current.slice})
+                elseif task.current.slice ~= task.current.sliceLim then
+                    task.current.slice = task.current.slice + 1
+                    task.current.colInc = task.current.colInc * -1
+                    if task.current.colInc == 1 then
+                        task.current.colLim = task.current.width - 1
+                    else
+                        task.current.colLim = 0
+                    end
+                    task.current.rowInc = task.current.rowInc * -1
+                    if task.current.rowInc == 1 then
+                        task.current.rowLim = task.current.height - 1
+                    else
+                        task.current.rowLim = 0
+                    end
+                    task.current.target = action.localToGlobal(task.current.origin, {x = task.current.col, y = task.current.row, z = task.current.slice})
+                else
+                    task.queueBegin("goToPos", {pos = task.current.origin})
+                end
+            end
+            if task.current.target then
+                if action.moveTowardPos(task.current.target, false) then
+                    task.queueBegin("searchForOre")
+                    task.current.target = nil
+                end
+            end
+        end,
+
+        onResume = function(priorType)
+            if priorType == "goToPos" then
+                action.removeWaypoint()
+                task.queueComplete()
+            end
+        end,
+    },
+}
+
+--------------------------------------------------------------------------------
+
+-- Main
+
+function main()
+    state.running = true
+    state.paused = false
+
+    state.x = 1
+    state.y = 1
+    state.z = 1
+    state.facing = 1
+
+    params.ignoreFrom = 1
+    params.ignoreThru = 4
+    params.fuelFrom = 5
+    params.fuelThru = 5
+    params.sealant = nil
+
+    task.queueBegin("excavate", {width=4, height = 3, length = 5})
+
+    while state.running do
+        util.pause()
+        task.executeTick()
+    end
+end
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+-- GUI
+function printNormal(str, xpos, ypos)
+    term.setCursorPos(xpos, ypos)
+    term.write (str)
+end
+
+function printReverse(str, xpos, ypos)
+    term.setCursorPos(xpos - (#str-1), ypos)
+    term.write (str)
+end
+
+function printLeft(str, ypos)
+    term.setCursorPos(1, ypos)
+    term.write(str)
+end
+
+function printCentered(str, ypos)
+    term.setCursorPos(screenw/2 - #str/2 + 1, ypos)
+    term.write(str)
+end
+
+function printRight(str, ypos)
+    term.setCursorPos(screenw - #str, ypos)
+    term.write(str)
+end
+
+function readLines( sLines, _sReplaceChar )
+    term.setCursorBlink( true )
+    local w, h = term.getSize()
+    local nPos = 0
+    local nSelect = 1
+    local vSelect = 1
+    local function redraw( _sCustomReplaceChar )
+        local nScroll = 0
+        if sLines[nSelect].sx + nPos >= w then
+            nScroll = (sLines[nSelect].sx + nPos) - w
+        end
+        term.setCursorPos( sLines[nSelect].sx, sLines[nSelect].sy )
+        local sReplace = _sCustomReplaceChar or _sReplaceChar
+        if sReplace then
+            term.write( string.rep(sReplace, string.len(sLines[nSelect].text) - nScroll) )
+        else
+            term.write( string.sub( sLines[nSelect].text, nScroll + 1 ) )
+        end
+        term.setCursorPos( sLines[nSelect].sx + nPos - nScroll, sLines[nSelect].sy )
+    end
+    for nVar, tVar in ipairs(sLines) do
+        nSelect = nVar
+        redraw()
+        if tVar.text ~= "" then
+            vSelect = nVar
+        end
+    end
+    nSelect = vSelect
+    nPos = #sLines[nSelect].text
+    redraw()
+    while true do
+        local sEvent, param = os.pullEvent()
+        if sEvent == "char" then
+            sLines[nSelect].text = string.sub( sLines[nSelect].text, 1, nPos ) .. param .. string.sub( sLines[nSelect].text, nPos + 1 )
+            nPos = nPos + 1
+            redraw()
+        elseif sEvent == "key" then
+            if param == keys.enter then
+                -- Enter
+                if nSelect < #sLines then
+                    nSelect = nSelect + 1
+                    if sLines[nSelect].text == "" then
+                        nPos = 0
+                    else
+                        nPos = #sLines[nSelect].text
+                    end
+                    redraw()
+                else
+                    break
+                end
+            elseif param == keys.left then
+                -- Left
+                if nPos > 0 then
+                    nPos = nPos - 1
+                    redraw()
+                end
+            elseif param == keys.right then
+                -- Right
+                if nPos < string.len(sLines[nSelect].text) then
+                    nPos = nPos + 1
+                    redraw()
+                end
+            elseif param == keys.up or param == keys.down then
+                -- Up or down
+                if param == keys.up then
+                    -- Up
+                    if nSelect > 1 then
+                        nSelect = nSelect - 1
+                        if sLines[nSelect].text == "" then
+                            nPos = 0
+                        else
+                            nPos = #sLines[nSelect].text
+                        end
+                        redraw()
+                    end
+                else
+                    -- Down
+                    if nSelect < #sLines then
+                        nSelect = nSelect + 1
+                        if sLines[nSelect].text == "" then
+                            nPos = 0
+                        else
+                            nPos = #sLines[nSelect].text
+                        end
+                        redraw()
+                    else
+                        break
+                    end
+                end
+                redraw()
+            elseif param == keys.backspace then
+                -- Backspace
+                if nPos > 0 then
+                    redraw(" ");
+                    sLines[nSelect].text = string.sub( sLines[nSelect].text, 1, nPos - 1 ) .. string.sub( sLines[nSelect].text, nPos + 1 )
+                    nPos = nPos - 1
+                    redraw()
+                end
+            elseif param == keys.home then
+                -- Home
+                nPos = 0
+                redraw()
+            elseif param == keys.delete then
+                if nPos < string.len(sLines[nSelect].text) then
+                    redraw(" ");
+                    sLines[nSelect].text = string.sub( sLines[nSelect].text, 1, nPos ) .. string.sub( sLines[nSelect].text, nPos + 2 )
+                    redraw()
+                end
+            elseif param == keys["end"] then
+                -- End
+                nPos = string.len(sLines[nSelect].text)
+                redraw()
+            end
+        end
+    end
+    term.setCursorBlink( false )
+    return sLine
+end
+
+local function locate()
+    local x,y,z,facing
+    if rednet.open("right") then
+        printCentered("Receiving coordinates from host...", 4)
+        x,y,z = gps.locate(3)
+        if x and y and z then
+            goForward()
+            local tmpx,tmpy,tmpz = gps.locate(3)
+            if tmpx > x then
+                faceing = 3
+            elseif tmpx < x then
+                faceing = 1
+            elseif tmpz > z then
+                faceing = 0
+            elseif tmpz < z then
+                facing = 2
+            end
+            return x,y,z,facing
+        else
+            printCentered("Unable to get GPS cords.  Please,", 3)
+            printCentered("enter the turtles cords manually.", 4)
+        end
+    else
+        printCentered("No wireless modem found, please", 3)
+        printCentered("enter the cords manualy.", 4)
+    end
+    printLeft("     x: ", 6)
+    printLeft("     y: ", 7)
+    printLeft("     z: ", 8)
+    printLeft("  face: ", 9)
+    while true do
+        readLines( tCordsInput )
+        x,y,z,facing = tonumber(tCordsInput[1].text),tonumber(tCordsInput[2].text),tonumber(tCordsInput[3].text),tonumber(tCordsInput[4].text)
+        if x ~= nil and y ~= nil and y > 0 and y < 256 and z ~= nil and facing ~= nil and facing < 4 and facing >= 0 then
+            return x,y,z,facing
+        end
+    end
+end
+
+local function drawHeader()
+    printCentered(program, 1)
+    printLeft(string.rep("-", screenw), 2)
+    printLeft("["..version.."]"..string.rep("-", screenw-#author-#version-7).."[by "..author.."]", screenh)
+end
+
+local function drawMainMenu()
+    term.clear()
+    drawHeader()
+    printLeft(WRAmessage,screenh-3)
+    printLeft(string.rep("-", screenw), screenh-2)
+    if state.paused then
+        if select == 1 then
+            printCentered("[RESUME]  REFUEL   SAVE   EXIT ", screenh-1)
+        elseif select == 2 then
+            printCentered(" RESUME  [REFUEL]  SAVE   EXIT ", screenh-1)
+        elseif select == 3 then
+            printCentered(" RESUME   REFUEL  [SAVE]  EXIT ", screenh-1)
+        elseif select == 4 then
+            printCentered(" RESUME   REFUEL   SAVE  [EXIT]", screenh-1)
+        end
+    else
+        printCentered("[PAUSE]", screenh-1)
+    end
+end
+
+local function drawGPSMenu()
+    if select == 2 then
+        printCentered("[DONE]", screenh-1)
+    elseif select == 1 then
+        term.clear()
+        drawHeader()
+        printLeft(string.rep("-", screenw), screenh-2)
+        printCentered(" DONE ", screenh-1)
+        select = 2
+        drawGPSMenu()
+    end
+end
+
+local function drawRefuelMenu()
+    local refuelList = {
+        "+-------------------------------+",
+        "|    Are you sure you want to   |",
+        "|       refuel the turtle.      |",
+        "|                               |",
+        "|        YES          NO        |",
+        "+-------------------------------+"
+    }
+    for i=1,#refuelList do
+        if i == #refuelList-1 then
+            if select == 1 then
+                printCentered("|       [YES]         NO        |", 3 + i)
+            elseif select == 2 then
+                printCentered("|        YES         [NO]       |", 3 + i)
+            end
+        else
+            printCentered(refuelList[i], 3 + i)
+        end
+    end
+end
+
+local function drawRefuel()
+    local refuelList = {
+        "+-------------------------------+",
+        "|      Turtle fuel level is     |",
+        "|                               |",
+        "|                               |",
+        "|              OK               |",
+        "+-------------------------------+"
+    }
+    for i=1,#refuelList do
+        if i == #refuelList-1 then
+            printCentered("|             [OK]              |", 3 + i)
+        elseif i == #refuelList-3 then
+            printCentered(refuelList[i], 3 + i)
+            printCentered(fuel_level, 3 + i)
+        else
+            printCentered(refuelList[i], 3 + i)
+        end
+    end
+end
+
+local function drawSaveMenu()
+    local saveList = {
+        "+-------------------------------+",
+        "|    Would you like to save?    |",
+        "|                               |",
+        "|                               |",
+        "|        YES          NO        |",
+        "+-------------------------------+"
+    }
+    for i=1,#saveList do
+        if i == #saveList-1 then
+            if select == 1 then
+                printCentered("|       [YES]         NO        |", 3 + i)
+            elseif select == 2 then
+                printCentered("|        YES         [NO]       |", 3 + i)
+            end
+        else
+            printCentered(saveList[i], 3 + i)
+        end
+    end
+end
+
+local function drawExitMenu()
+    local exitList = {
+        "+-------------------------------+",
+        "|    Would you like to save     |",
+        "|        before exiting?        |",
+        "|                               |",
+        "|        YES          NO        |",
+        "+-------------------------------+"
+    }
+    for i=1,#exitList do
+        if i == #exitList-1 then
+            if select == 1 then
+                printCentered("|       [YES]         NO        |", 3 + i)
+            elseif select == 2 then
+                printCentered("|        YES         [NO]       |", 3 + i)
+            end
+        else
+            printCentered(exitList[i], 3 + i)
+        end
+    end
+end
+
+local function drawResultMenu()
+    local resultList = {
+        "+-------------------------------+",
+        "|                               |",
+        "|    Ores mined this session!   |",
+        "|                               |",
+        "|             [OK]              |",
+        "+-------------------------------+"
+    }
+    for i=1,#resultList do
+        if i == #resultList-1 then
+            printCentered("|             [OK]              |", 3 + i)
+        elseif i == #resultList-4 then
+            printCentered(resultList[i], 2 + i)
+            printCentered(ores_mined, 2 + i)
+        else
+            printCentered(resultList[i], 3 + i)
+        end
+    end
+end
+
+local function runOreFinder(_sSave)
+    _tSave = {}
+    _tSave = loadTable(_sSave)
+    local menustate = "gpsmenu"
+    local function rungui()
+        local mopt = {
+            ["main"] = {
+                options = {"toggle_pause", "refuelmenu", "savemenu", "exitmenu"},
+                draw = drawMainMenu
+            },
+            ["gpsmenu"] = {
+                options = {"locate", "exit"},
+                draw = drawGPSMenu
+            },
+            ["refuelmenu"] = {
+                options = {"refuel", "main"},
+                draw = drawRefuelMenu
+            },
+            ["refuel"] = {
+                options = {"main"},
+                draw = drawRefuel
+            },
+            ["savemenu"] = {
+                options = {"save", "main"},
+                draw = drawSaveMenu
+            },
+            ["exitmenu"] = {
+                options = {"save_exit", "exit"},
+                draw = drawExitMenu
+            },
+            ["resultmenu"] = {
+                options = {"exit"},
+                draw = drawResultMenu
+            }
+        }
+        tCordsInput = {
+            {text = "", sx = 9, sy = 6},
+            {text = "", sx = 9, sy = 7},
+            {text = "", sx = 9, sy = 8},
+            {text = "", sx = 9, sy = 9}
+        }
+        select = 1
+        fuel_level = tostring(turtle.getFuelLevel())
+        ores_mined = 0
+        while true do
+            mopt[menustate].draw()
+            local sEvent, param = os.pullEvent()
+            if sEvent == "key" then
+                if param == keys.up and select > 1 then
+                    select = select-1
+                elseif param == keys.down and select < #mopt[menustate].options then
+                    if state.paused then
+                        select = select+1
+                    end
+                elseif param == keys.left and select > 1 then
+                    select = select-1
+                elseif param == keys.right and select < #mopt[menustate].options then
+                    if state.paused then
+                        select = select+1
+                    end
+                elseif param == keys.enter then
+                    if mopt[menustate].options[select] == "save" or mopt[menustate].options[select] == "save_exit" then
+                        saveTable(_tSave, _sSave)
+                        if mopt[menustate].options[select] == "save_exit" then
+                            break
+                        end
+                        menustate = "main"
+                    elseif mopt[menustate].options[select] == "exit" then
+                        break
+                    elseif mopt[menustate].options[select] == "toggle_pause" then
+                        if state.paused then
+                            state.paused = false
+                        else
+                            state.paused = true
+                        end
+                    elseif mopt[menustate].options[select] == "refuel" then
+                        if turtle.getFuelLevel() ~= "unlimited" then
+                            for i=_tSave.ignore+1,16 do
+                                if turtle.getItemCount(i) > 0 then
+                                    turtle.select(i)
+                                    turtle.refuel(turtle.getItemCount(i))
+                                end
+                            end
+                            turtle.select(1)
+                        end
+                        fuel_level = tostring(turtle.getFuelLevel())
+                        menustate = mopt[menustate].options[select]
+                        select = 1
+                    else
+                        menustate = mopt[menustate].options[select]
+                        select = 1
+                    end
+                end
+            end
+        end
+    end
+    rungui()
+    menustate = "main"
+    if not _tSave.startPos then
+        _tSave.startPos = {x = state.x, y = state.y, z = state.z, facing = state.facing}
+        _tSave.returnPos = {x = state.x, y = state.y, z = state.z, facing = state.facing}
+    end
+    saveTable(_tSave, _sFile)
+    parallel.waitForAny(oreFinder, rungui)
+    if not fs.exists(_sFile) then
+        menustate = "resultmenu"
+        rungui()
+    end
+end
+
+main()
