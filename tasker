@@ -429,22 +429,22 @@ action = {
     --  None
     --
     -- Returns:
-    --  True if found, else false
+    --  0 if no blocks found, 1 if ignored block found, else 2
     --
     -- Locals:
     --  i - iterator
     --
     searchForward = function()
         if not turtle.detect() then
-            return false
+            return 0
         end
         for i=params.ignoreFrom,params.ignoreThru do
             turtle.select(i)
             if turtle.compare() then
-                return false
+                return 1
             end
         end
-        return true
+        return 2
     end,
 
 
@@ -455,22 +455,22 @@ action = {
     --  None
     --
     -- Returns:
-    --  True if found, else false
+    --  0 if no blocks found, 1 if ignored block found, else 2
     --
     -- Locals:
     --  i - iterator
     --
     searchUp = function()
         if not turtle.detectUp() then
-            return false
+            return 0
         end
         for i=params.ignoreFrom,params.ignoreThru do
             turtle.select(i)
             if turtle.compareUp() then
-                return false
+                return 1
             end
         end
-        return true
+        return 2
     end,
 
 
@@ -481,22 +481,82 @@ action = {
     --  None
     --
     -- Returns:
-    --  True if found, else false
+    --  0 if no blocks found, 1 if ignored block found, else 2
     --
     -- Locals:
     --  i - iterator
     --
     searchDown = function()
         if not turtle.detectDown() then
-            return false
+            return 0
         end
         for i=params.ignoreFrom,params.ignoreThru do
             turtle.select(i)
             if turtle.compareDown() then
-                return false
+                return 1
             end
         end
-        return true
+        return 2
+    end,
+
+
+    -- Purpose:
+    --  Seals the block in front
+    --
+    -- Arguments:
+    --  None
+    --
+    -- Returns:
+    --  True if successful, else false
+    --
+    sealForward = function()
+        if turtle.getItemCount(params.sealant) <= 1 then
+            return false
+        else
+            turtle.select(params.sealant)
+            turtle.place()
+            return true
+        end
+    end,
+
+
+    -- Purpose:
+    --  Seals the block above
+    --
+    -- Arguments:
+    --  None
+    --
+    -- Returns:
+    --  True if successful, else false
+    --
+    sealUp = function()
+        if turtle.getItemCount(params.sealant) <= 1 then
+            return false
+        else
+            turtle.select(params.sealant)
+            turtle.placeUp()
+            return true
+        end
+    end,
+
+
+    -- Purpose:
+    --  Seals the block below
+    --
+    -- Arguments:
+    --  None
+    --
+    -- Returns:
+    --  True if successful, else false
+    --
+    sealDown = function()
+        if turtle.getItemCount(params.sealant) <= 1 then
+            return false
+        else
+            turtle.select(params.sealant)
+            turtle.placeDown()
+            return true
+        end
     end,
 
 
@@ -915,21 +975,21 @@ tasktype = {
             action.enoughFuel(7)
             action.addWaypoint(action.getCurrentPos())
             task.current.direction = 1
-            task.current.restorePos = nil
+            task.current.restoreToPos = nil
         end,
 
         onExecute = function()
-            if task.current.restorePos then
-                if action.moveTowardPos(task.current.restorePos, false) then
-                    task.current.restorePos = nil
+            if task.current.restoreToPos then
+                if action.moveTowardPos(task.current.restoreToPos, false) then
+                    task.current.restoreToPos = nil
                 end
             elseif task.current.direction <= 6 then
                 local restoreTo = action.getCurrentPos()
                 if task.current.direction <= 4 then
                     restoreTo.facing = (restoreTo.facing + 1) % 4
-                    if action.searchForward() then
+                    if action.searchForward() == 2 then
                         if action.moveForward() then
-                            task.current.restorePos = restoreTo
+                            task.current.restoreToPos = restoreTo
                             task.current.direction = task.current.direction + 1
                             task.queueBegin("searchForOre")
                         end
@@ -938,9 +998,9 @@ tasktype = {
                         task.current.direction = task.current.direction + 1
                     end
                 elseif task.current.direction == 5 then
-                    if action.searchUp() then
+                    if action.searchUp() == 2 then
                         if action.moveUp() then
-                            task.current.restorePos = restoreTo
+                            task.current.restoreToPos = restoreTo
                             task.current.direction = task.current.direction + 1
                             task.queueBegin("searchForOre")
                         end
@@ -948,9 +1008,9 @@ tasktype = {
                         task.current.direction = task.current.direction + 1
                     end
                 elseif task.current.direction == 6 then
-                    if action.searchDown() then
+                    if action.searchDown() == 2 then
                         if action.moveDown() then
-                            task.current.restorePos = restoreTo
+                            task.current.restoreToPos = restoreTo
                             task.current.direction = task.current.direction + 1
                             task.queueBegin("searchForOre")
                         end
@@ -992,53 +1052,141 @@ tasktype = {
             task.current.col = 0
             task.current.row = 0
             task.current.slice = 0
+            task.current.facing = 0
             task.current.colInc = 1
             task.current.rowInc = 1
             task.current.colLim = task.current.width - 1
             task.current.rowLim = task.current.height - 1
             task.current.sliceLim = task.current.length - 1
             task.current.origin = action.getCurrentPos()
+            task.current.seal = data.seal
+            task.current.followVein = data.followVein
+            if task.current.seal or task.current.followVein then
+                task.current.step = 1
+            else
+                task.current.step = 7
+            end
+            task.current.restoreToPos = nil
             task.current.target = nil
             action.addWaypoint(action.getCurrentPos())
         end,
 
         onExecute = function()
-            if not task.current.target then
-                if task.current.col ~= task.current.colLim then
-                    task.current.col = task.current.col + task.current.colInc
-                    task.current.target = action.localToGlobal(task.current.origin, {x = task.current.col, y = task.current.row, z = task.current.slice})
-                elseif task.current.row ~= task.current.rowLim then
-                    task.current.row = task.current.row + task.current.rowInc
-                    task.current.colInc = task.current.colInc * -1
-                    if task.current.colInc == 1 then
-                        task.current.colLim = task.current.width - 1
-                    else
-                        task.current.colLim = 0
-                    end
-                    task.current.target = action.localToGlobal(task.current.origin, {x = task.current.col, y = task.current.row, z = task.current.slice})
-                elseif task.current.slice ~= task.current.sliceLim then
-                    task.current.slice = task.current.slice + 1
-                    task.current.colInc = task.current.colInc * -1
-                    if task.current.colInc == 1 then
-                        task.current.colLim = task.current.width - 1
-                    else
-                        task.current.colLim = 0
-                    end
-                    task.current.rowInc = task.current.rowInc * -1
-                    if task.current.rowInc == 1 then
-                        task.current.rowLim = task.current.height - 1
-                    else
-                        task.current.rowLim = 0
-                    end
-                    task.current.target = action.localToGlobal(task.current.origin, {x = task.current.col, y = task.current.row, z = task.current.slice})
-                else
-                    task.queueBegin("goToPos", {pos = task.current.origin})
+            if task.current.restoreToPos then
+                if action.moveTowardPos(task.current.restoreToPos, false) then
+                    task.current.restoreToPos = nil
                 end
-            end
-            if task.current.target then
-                if action.moveTowardPos(task.current.target, false) then
-                    task.queueBegin("searchForOre")
-                    task.current.target = nil
+            elseif task.current.step <= 4 then
+                local inspect = (task.current.facing + task.current.step - 1) % 4
+                if (inspect == 0 and task.current.slice == task.current.sliceLim) or
+                   (inspect == 1 and task.current.col == 0) or
+                   (inspect == 2 and task.current.slice == 0) or
+                   (inspect == 3 and task.current.col == (task.current.width-1)) then
+                    action.face((task.current.origin.facing + inspect) % 4)
+                    local blockType = action.searchForward()
+                    print(blockType)
+                    if blockType == 2 and task.current.followVein then
+                        local currentPos = action.getCurrentPos()
+                        currentPos.facing = nil
+                        if action.moveForward() then
+                            task.current.restoreToPos = currentPos
+                            task.queueBegin("searchForOre")
+                        end
+                    elseif blockType == 0 and params.sealant and task.current.seal then
+                        action.sealForward()
+                        task.current.step = task.current.step + 1
+                    else
+                        task.current.step = task.current.step + 1
+                    end
+                else
+                    task.current.step = task.current.step + 1
+                end
+            elseif task.current.step == 5 then
+                if task.current.row == (task.current.height-1) then
+                    local blockType = action.searchUp()
+                    print(blockType)
+                    if blockType == 2 and task.current.followVein then
+                        local currentPos = action.getCurrentPos()
+                        currentPos.facing = nil
+                        if action.moveUp() then
+                            task.current.restoreToPos = currentPos
+                            task.queueBegin("searchForOre")
+                        end
+                    elseif blockType == 0 and params.sealant and task.current.seal then
+                        action.sealUp()
+                        task.current.step = task.current.step + 1
+                    else
+                        task.current.step = task.current.step + 1
+                    end
+                else
+                    task.current.step = task.current.step + 1
+                end
+            elseif task.current.step == 6 then
+                if task.current.row == 0 then
+                    local blockType = action.searchDown()
+                    print(blockType)
+                    if blockType == 2 and task.current.followVein then
+                        local currentPos = action.getCurrentPos()
+                        currentPos.facing = nil
+                        if action.moveDown() then
+                            task.current.restoreToPos = currentPos
+                            task.queueBegin("searchForOre")
+                        end
+                    elseif blockType == 0 and params.sealant and task.current.seal then
+                        action.sealDown()
+                        task.current.step = task.current.step + 1
+                    else
+                        task.current.step = task.current.step + 1
+                    end
+                else
+                    task.current.step = task.current.step + 1
+                end
+            else
+                -- Calculate new position
+                if not task.current.target then
+                    if task.current.col ~= task.current.colLim then
+                        task.current.col = task.current.col + task.current.colInc
+                        task.current.target = action.localToGlobal(task.current.origin, {x = task.current.col, y = task.current.row, z = task.current.slice})
+                    elseif task.current.row ~= task.current.rowLim then
+                        task.current.row = task.current.row + task.current.rowInc
+                        task.current.colInc = task.current.colInc * -1
+                        if task.current.colInc == 1 then
+                            task.current.colLim = task.current.width - 1
+                        else
+                            task.current.colLim = 0
+                        end
+                        task.current.target = action.localToGlobal(task.current.origin, {x = task.current.col, y = task.current.row, z = task.current.slice})
+                    elseif task.current.slice ~= task.current.sliceLim then
+                        task.current.slice = task.current.slice + 1
+                        task.current.colInc = task.current.colInc * -1
+                        if task.current.colInc == 1 then
+                            task.current.colLim = task.current.width - 1
+                        else
+                            task.current.colLim = 0
+                        end
+                        task.current.rowInc = task.current.rowInc * -1
+                        if task.current.rowInc == 1 then
+                            task.current.rowLim = task.current.height - 1
+                        else
+                            task.current.rowLim = 0
+                        end
+                        task.current.target = action.localToGlobal(task.current.origin, {x = task.current.col, y = task.current.row, z = task.current.slice})
+                    else
+                        task.queueBegin("goToPos", {pos = task.current.origin})
+                    end
+                end
+
+                -- Move to new position
+                if task.current.target then
+                    if action.moveTowardPos(task.current.target, false) then
+                        task.current.target = nil
+                        task.current.facing = (4 + state.facing - task.current.origin.facing) % 4
+                        if task.current.seal or task.current.followVein then
+                            task.current.step = 1
+                        else
+                            task.current.step = 7
+                        end
+                    end
                 end
             end
         end,
@@ -1069,9 +1217,9 @@ function main()
     params.ignoreThru = 4
     params.fuelFrom = 5
     params.fuelThru = 5
-    params.sealant = nil
+    params.sealant = 1
 
-    task.queueBegin("excavate", {width=4, height = 3, length = 5})
+    task.queueBegin("excavate", {width=1, height = 3, length = 7, followVein=true, seal=true})
 
     while state.running do
         util.pause()
