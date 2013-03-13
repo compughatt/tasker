@@ -952,25 +952,8 @@ tasktype = {
         end,
     },
 
-    moveAlong = {
-        onStart = function(data)
-            task.current.length = data.length
-            task.current.progress = 0
-            action.enoughFuel(task.current.length + 1)
-        end,
 
-        onExecute = function()
-            if task.current.progress < task.current.length then
-                action.moveForward()
-                task.current.progress = task.current.progress + 1
-                task.queueTask("searchForOre")
-            else
-                task.queueComplete()
-            end
-        end,
-    },
-
-    searchForOre = {
+    followVein = {
         onStart = function()
             action.enoughFuel(7)
             action.addWaypoint(action.getCurrentPos())
@@ -991,7 +974,7 @@ tasktype = {
                         if action.moveForward() then
                             task.current.restoreToPos = restoreTo
                             task.current.direction = task.current.direction + 1
-                            task.queueBegin("searchForOre")
+                            task.queueBegin("followVein")
                         end
                     else
                         action.turnRight()
@@ -1002,7 +985,7 @@ tasktype = {
                         if action.moveUp() then
                             task.current.restoreToPos = restoreTo
                             task.current.direction = task.current.direction + 1
-                            task.queueBegin("searchForOre")
+                            task.queueBegin("followVein")
                         end
                     else
                         task.current.direction = task.current.direction + 1
@@ -1012,7 +995,7 @@ tasktype = {
                         if action.moveDown() then
                             task.current.restoreToPos = restoreTo
                             task.current.direction = task.current.direction + 1
-                            task.queueBegin("searchForOre")
+                            task.queueBegin("followVein")
                         end
                     else
                         task.current.direction = task.current.direction + 1
@@ -1036,7 +1019,7 @@ tasktype = {
 
         onExecute = function()
             if not action.isAtPos(task.current.destination) then
-               action.moveTowardPos(task.current.destination, true)
+               action.moveTowardPos(task.current.destination, false)
             else
                 task.queueComplete()
             end
@@ -1090,7 +1073,7 @@ tasktype = {
                         currentPos.facing = nil
                         if action.moveForward() then
                             task.current.restoreToPos = currentPos
-                            task.queueBegin("searchForOre")
+                            task.queueBegin("followVein")
                         end
                     elseif blockType == 0 and params.sealant and task.current.seal then
                         action.sealForward()
@@ -1110,7 +1093,7 @@ tasktype = {
                         currentPos.facing = nil
                         if action.moveUp() then
                             task.current.restoreToPos = currentPos
-                            task.queueBegin("searchForOre")
+                            task.queueBegin("followVein")
                         end
                     elseif blockType == 0 and params.sealant and task.current.seal then
                         action.sealUp()
@@ -1130,7 +1113,7 @@ tasktype = {
                         currentPos.facing = nil
                         if action.moveDown() then
                             task.current.restoreToPos = currentPos
-                            task.queueBegin("searchForOre")
+                            task.queueBegin("followVein")
                         end
                     elseif blockType == 0 and params.sealant and task.current.seal then
                         action.sealDown()
